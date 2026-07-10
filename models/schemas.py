@@ -24,6 +24,7 @@ class TaskStatus(BaseModel):
     task_id: str
     status: str
     progress: str  # pending / searching / drafting / reviewing / done
+    report: Optional[str] = None
     error: Optional[str] = None
 
 

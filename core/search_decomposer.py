@@ -1,5 +1,5 @@
 """
-搜索意图拆解 — LLM动态拆解用户意图为多维关键词，并行搜索
+搜索意图拆解 — LLM动态拆解用户意图为多维关键词，并行网络搜索
 """
 import json
 import re
@@ -55,8 +55,45 @@ FALLBACK_TEMPLATES = {
 }
 
 
+async def _fetch_search_results(query: str, max_results: int = 5) -> List[Dict]:
+    """通过 DuckDuckGo HTML 搜索获取结果（无需 API Key）"""
+    import httpx
+    from urllib.parse import quote
+
+    results = []
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/120.0.0.0 Safari/537.36"
+            })
+            if resp.status_code != 200:
+                logger.warning("DuckDuckGo returned %d for query: %s", resp.status_code, query)
+                return results
+
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for item in soup.select(".result")[:max_results]:
+                title_el = item.select_one(".result__title")
+                snippet_el = item.select_one(".result__snippet")
+                link_el = item.select_one(".result__url")
+                if title_el and snippet_el:
+                    results.append({
+                        "title": title_el.get_text(strip=True),
+                        "snippet": snippet_el.get_text(strip=True),
+                        "url": link_el.get_text(strip=True) if link_el else "",
+                        "query": query,
+                    })
+        logger.info("Search '%s' returned %d results", query, len(results))
+    except Exception as e:
+        logger.warning("Search failed for '%s': %s", query, e)
+    return results
+
+
 class SearchDecomposer:
-    """LLM驱动的搜索意图拆解器"""
+    """LLM驱动的搜索意图拆解与并行检索"""
 
     def __init__(self):
         from core.llm_factory import create_chat_model
@@ -65,18 +102,17 @@ class SearchDecomposer:
     def decompose(self, user_intent: str) -> Dict[str, List[str]]:
         """将用户意图拆解为四维度搜索关键词，失败时回退静态模板"""
         try:
+            from core.llm_factory import invoke_with_retry
             messages = [
                 SystemMessage(content=SYSTEM_PROMPT),
                 HumanMessage(content=f"请为以下主题生成搜索关键词：{user_intent}")
             ]
-            response = self.llm.invoke(messages)
+            response = invoke_with_retry(self.llm, messages)
             content = response.content
 
-            # 尝试解析JSON
             try:
                 result = json.loads(content)
             except json.JSONDecodeError:
-                # JSON解析失败，正则提取降级
                 result = self._regex_extract(content)
 
             logger.info("Search decomposition success for: %s", user_intent)
@@ -87,7 +123,7 @@ class SearchDecomposer:
             return self._fallback(user_intent)
 
     def _regex_extract(self, text: str) -> Dict[str, List[str]]:
-        """正则提取兜底"""
+        """正则提取兜底：从 LLM 非标准 JSON 回复中提取关键词"""
         result = {}
         for dim in settings.AGENT_SEARCH_DIMENSIONS:
             pattern = rf'"{re.escape(dim)}"\s*:\s*\[(.*?)\]'
@@ -107,14 +143,17 @@ class SearchDecomposer:
         return FALLBACK_TEMPLATES["default"]
 
     async def search_parallel(self, keywords: Dict[str, List[str]]) -> List[Dict]:
-        """并行执行多路搜索（asyncio.gather）"""
+        """并行执行多路网络搜索（asyncio.gather）"""
         async def search_dimension(dim: str, queries: List[str]) -> List[Dict]:
             results = []
-            for q in queries[:3]:  # 每维度最多3个查询
+            for q in queries[:3]:
                 try:
-                    results.append({"dimension": dim, "query": q, "results": []})
-                except Exception:
-                    pass
+                    items = await _fetch_search_results(q, max_results=3)
+                    for item in items:
+                        item["dimension"] = dim
+                    results.extend(items)
+                except Exception as e:
+                    logger.warning("Search dimension '%s' query '%s' failed: %s", dim, q, e)
             return results
 
         tasks = [
@@ -127,4 +166,6 @@ class SearchDecomposer:
         for r in all_results:
             if isinstance(r, list):
                 flat_results.extend(r)
+            elif isinstance(r, Exception):
+                logger.warning("Search task exception: %s", r)
         return flat_results

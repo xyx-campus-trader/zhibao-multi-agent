@@ -27,6 +27,7 @@ passlib[bcrypt]==1.7.4
 
 # 工具
 httpx==0.28.1
+beautifulsoup4>=4.12
 aiofiles==24.1.0
 python-dotenv==1.0.1
 

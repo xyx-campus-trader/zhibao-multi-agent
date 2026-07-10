@@ -1,0 +1,92 @@
+[
+  {
+    "topic": "人工智能行业周报",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 2,
+    "expected_terms": ["AI", "大模型", "人工智能", "GPT", "融资"]
+  },
+  {
+    "topic": "新能源产业动态",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 2,
+    "expected_terms": ["新能源", "光伏", "电池", "储能", "电动"]
+  },
+  {
+    "topic": "半导体芯片行业",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 2,
+    "expected_terms": ["芯片", "半导体", "晶圆", "制程", "EDA"]
+  },
+  {
+    "topic": "自动驾驶一周动态",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["自动驾驶", "激光雷达", "L4", "无人驾驶", "牌照"]
+  },
+  {
+    "topic": "生物医药行业周报",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["医药", "新药", "FDA", "临床", "创新药"]
+  },
+  {
+    "topic": "金融科技FinTech",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["金融科技", "支付", "数字货币", "区块链", "监管"]
+  },
+  {
+    "topic": "云计算行业动态",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["云计算", "AWS", "阿里云", "SaaS", "数据中心"]
+  },
+  {
+    "topic": "机器人产业报告",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["机器人", "人形机器人", "工业机器人", "自动化", "传感器"]
+  },
+  {
+    "topic": "元宇宙与虚拟现实",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["元宇宙", "VR", "AR", "虚拟现实", "空间计算"]
+  },
+  {
+    "topic": "网络安全行业周报",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["网络安全", "数据安全", "零信任", "漏洞", "防火墙"]
+  },
+  {
+    "topic": "量子计算进展",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["量子计算", "量子比特", "量子芯片", "超导", "量子"]
+  },
+  {
+    "topic": "智能制造工业4.0",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["智能制造", "工业4.0", "工业互联网", "数字孪生", "MES"]
+  },
+  {
+    "topic": "教育科技EdTech",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["教育", "在线教育", "AI教育", "教育信息化", "教育"]
+  },
+  {
+    "topic": "低空经济无人机",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["低空经济", "无人机", "eVTOL", "空域", "适航"]
+  },
+  {
+    "topic": "碳中和与碳交易",
+    "expected_dimensions": ["政策动向", "公司动态", "投融资", "行业趋势"],
+    "min_keywords_per_dimension": 1,
+    "expected_terms": ["碳中和", "碳交易", "CCER", "碳捕获", "减排"]
+  }
+]
