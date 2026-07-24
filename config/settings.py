@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
     HOST: str = "0.0.0.0"
-    PORT: int = 8000
+    PORT: int = 8002
 
     # ===== LLM =====
     LLM_PROVIDER: Literal["openai", "ollama", "deepseek"] = "deepseek"
@@ -29,9 +29,12 @@ class Settings(BaseSettings):
     DB_USER: str = "postgres"
     DB_PASSWORD: str = ""
     DB_NAME: str = "zhibao"
+    SQLITE_URL: str = "sqlite+aiosqlite:///./zhibao.db"
 
     @property
     def DATABASE_URL(self) -> str:
+        if self.SQLITE_URL:
+            return self.SQLITE_URL
         return (
             f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASSWORD}"
             f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"

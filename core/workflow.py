@@ -13,6 +13,7 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 MAX_REVISION_ROUNDS = 2
+MAX_HITL_ROUNDS = 2  # HITL 驳回最大轮次，超出则强制通过
 
 
 class AgentState(TypedDict):
@@ -27,7 +28,8 @@ class AgentState(TypedDict):
     status: str  # pending / searching / drafting / reviewing / done / failed
     error: Optional[str]
     hitl_approved: bool
-    revision_count: int  # 修订轮次计数
+    revision_count: int          # LLM自动修订轮次
+    hitl_revision_count: int     # HITL 人工驳回轮次
 
 
 # ============ Agent 节点 ============
@@ -64,7 +66,14 @@ class ResearcherAgent:
                 state.get("search_keywords", {})
             )
             state["research_results"] = results
-            state["status"] = "drafting"
+            # 判空：四路全空时报错，不让 LLM 硬编
+            if not results:
+                state["error"] = "所有搜索均未返回结果，请检查网络或换个主题"
+                state["status"] = "failed"
+                logger.warning("[Researcher] All searches returned empty for topic: %s",
+                               state.get("topic", ""))
+            else:
+                state["status"] = "drafting"
         except Exception as e:
             state["error"] = str(e)
             state["status"] = "failed"
@@ -80,7 +89,9 @@ class EditorAgent:
         self._invoke = invoke_with_retry
 
     async def run(self, state: AgentState) -> AgentState:
-        logger.info("[Editor] Drafting report (round %d)", state.get("revision_count", 0) + 1)
+        logger.info("[Editor] Drafting report (auto_rev=%d, hitl_rev=%d)",
+                     state.get("revision_count", 0),
+                     state.get("hitl_revision_count", 0))
         try:
             prompt = self._build_prompt(state)
             response = self._invoke(self.llm, [HumanMessage(content=prompt)])
@@ -93,10 +104,10 @@ class EditorAgent:
 
     def _build_prompt(self, state: AgentState) -> str:
         revision_hint = ""
-        if state.get("review_notes") and state.get("revision_count", 0) > 0:
+        if state.get("review_notes") and (state.get("revision_count", 0) > 0 or state.get("hitl_revision_count", 0) > 0):
             revision_hint = f"""
 
-【上一轮审核意见，请据此修改】
+【审核意见，请据此修改】
 {state['review_notes']}
 """
         return f"""请根据以下研究资料撰写一份行业周报：
@@ -186,7 +197,14 @@ def build_workflow(
             "failed": END,
         }
     )
-    workflow.add_edge("hitl_check", END)
+    workflow.add_conditional_edges(
+        "hitl_check",
+        _route_after_hitl,
+        {
+            "revise": "editor",  # 驳回 → Editor 修改
+            "end": END,          # 通过或强制通过 → 结束
+        }
+    )
 
     if checkpointer:
         return workflow.compile(checkpointer=checkpointer)
@@ -194,7 +212,7 @@ def build_workflow(
 
 
 async def _hitl_check(state: AgentState) -> AgentState:
-    """HITL 人工审核节点 — 使用 LangGraph interrupt() 中断等待人工确认"""
+    """HITL 人工审核节点 — 中断等待人工确认，驳回时带反馈回到 Editor"""
     decision = interrupt({
         "message": f"请审核周报草稿（主题：{state.get('topic', '')}）",
         "draft_preview": state.get("draft", "")[:500],
@@ -202,12 +220,33 @@ async def _hitl_check(state: AgentState) -> AgentState:
         "action": "approve_or_reject",
     })
     if isinstance(decision, dict) and decision.get("approved"):
+        # 批准 → 输出终稿
         state["hitl_approved"] = True
         state["status"] = "done"
         state["final_report"] = state.get("draft", "")
     else:
+        # 驳回 → 记录反馈，增加驳回轮次
         state["hitl_approved"] = False
-        state["status"] = "pending"
+        feedback = decision.get("feedback", "") if isinstance(decision, dict) else ""
+        state["review_notes"] = feedback
+        hitl_count = state.get("hitl_revision_count", 0) + 1
+        state["hitl_revision_count"] = hitl_count
+
+        if hitl_count < MAX_HITL_ROUNDS:
+            # 未超上限 → 回到 Editor 修改
+            state["status"] = "revising"
+            logger.info(
+                "[HITL] Rejected (round %d/%d), returning to editor with feedback: %s",
+                hitl_count, MAX_HITL_ROUNDS, feedback[:80],
+            )
+        else:
+            # 超出上限 → 强制通过
+            state["status"] = "done"
+            state["final_report"] = state.get("draft", "")
+            state["hitl_approved"] = True
+            logger.info(
+                "[HITL] Max reject rounds reached, force accepting draft"
+            )
     return state
 
 
@@ -219,4 +258,14 @@ def _route_after_review(state: AgentState) -> str:
         return "revise"
     if state.get("hitl_approved") is False:
         return "hitl"
+    return "end"
+
+
+def _route_after_hitl(state: AgentState) -> str:
+    """HITL 审核后的路由：通过则结束，驳回则回 Editor 修改"""
+    if state.get("hitl_approved"):
+        return "end"
+    # 驳回：status 为 "revising" 才回 editor，否则结束（强制通过的情况）
+    if state.get("status") == "revising":
+        return "revise"
     return "end"

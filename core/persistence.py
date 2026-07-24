@@ -1,115 +1,93 @@
+"""异步任务持久化 — PostgreSQL 落盘为真值 + Redis 读缓存(cache-aside)
+
+设计原则:
+- 写:任务状态同步写入 PostgreSQL,落盘成功即视为已保存;随后 best-effort 更新
+  Redis 缓存,缓存失败仅记日志,不影响主流程(Redis 是加速手段,不是真值)。
+- 读:先查 Redis,未命中回源 PostgreSQL 并回填缓存。
+- 恢复:服务重启时从 PostgreSQL 读取未完成任务(status 非终态),数据落盘不丢。
 """
-持久化模块 — 异步任务三级持久化存储 (Redis → PostgreSQL → 内存)
-"""
-import json
 import logging
-from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from typing import Any, Dict, Optional
+
+from sqlalchemy import select
+
+from models.database import TaskState
 
 logger = logging.getLogger(__name__)
 
+_CACHE_PREFIX = "task:"
+_CACHE_TTL = 7 * 24 * 3600  # 7 天,仅缓存,过期后回源 PG
+_TERMINAL_STATUS = ("done", "failed", "cancelled")
+
 
 class TaskPersistence:
-    """三级持久化存储管理器"""
+    """PG 为真值、Redis 为读缓存的任务状态存储。"""
 
-    def __init__(self, redis_client=None, db_session_factory=None):
-        self._redis = redis_client
+    def __init__(self, db_session_factory, redis_client=None):
+        if db_session_factory is None:
+            raise ValueError("db_session_factory 必填:PostgreSQL 是任务状态的真值存储")
         self._db_factory = db_session_factory
-        self._memory: Dict[str, Dict[str, Any]] = {}  # 内存兜底
-        self._redis_available = False
+        self._redis = redis_client  # 可为 None:无缓存时直接走 PG
 
     async def save_task(self, task_id: str, state: Dict[str, Any]) -> bool:
-        """保存任务状态，任一层写入成功即视为已保存"""
-        # 第一层：Redis
-        if self._redis:
-            try:
-                from redis import Redis
-                if isinstance(self._redis, Redis):
-                    key = f"task:{task_id}"
-                    self._redis.setex(
-                        key,
-                        timedelta(days=7),
-                        json.dumps(state, ensure_ascii=False)
-                    )
-                    self._redis_available = True
-                    return True
-            except Exception:
-                self._redis_available = False
-                logger.debug("Redis save failed, falling back")
-
-        # 第二层：PostgreSQL
-        if self._db_factory:
-            try:
-                async with self._db_factory() as db:
-                    from sqlalchemy import text
-                    await db.execute(
-                        text(
-                            "INSERT INTO task_states (task_id, state, updated_at) "
-                            "VALUES (:id, :state, :ts) "
-                            "ON CONFLICT (task_id) DO UPDATE "
-                            "SET state = :state, updated_at = :ts"
-                        ),
-                        {
-                            "id": task_id,
-                            "state": json.dumps(state, ensure_ascii=False),
-                            "ts": datetime.utcnow(),
-                        }
-                    )
-                    await db.commit()
-                    return True
-            except Exception:
-                logger.debug("PostgreSQL save failed, falling back to memory")
-
-        # 第三层：内存（最终兜底）
-        self._memory[task_id] = state
+        """保存任务状态:PG 落盘成功即算已保存,Redis best-effort 更新。"""
+        async with self._db_factory() as db:
+            await db.merge(TaskState(task_id=task_id, state=state))
+            await db.commit()
+        await self._cache_set(task_id, state)
         return True
 
     async def load_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """恢复任务状态，按 Redis → PostgreSQL → 内存 优先级查找"""
-        # Redis
-        if self._redis and self._redis_available:
-            try:
-                raw = self._redis.get(f"task:{task_id}")
-                if raw:
-                    return json.loads(raw)
-            except Exception:
-                pass
+        """读取任务状态:先 Redis,未命中回源 PG 并回填缓存。"""
+        cached = await self._cache_get(task_id)
+        if cached is not None:
+            return cached
 
-        # PostgreSQL
-        if self._db_factory:
-            try:
-                async with self._db_factory() as db:
-                    from sqlalchemy import text
-                    result = await db.execute(
-                        text("SELECT state FROM task_states WHERE task_id = :id"),
-                        {"id": task_id}
-                    )
-                    row = result.fetchone()
-                    if row:
-                        return json.loads(row[0])
-            except Exception:
-                pass
-
-        # 内存
-        return self._memory.get(task_id)
+        async with self._db_factory() as db:
+            obj = await db.get(TaskState, task_id)
+            if obj is None:
+                return None
+            state = obj.state
+        await self._cache_set(task_id, state)
+        return state
 
     async def recover_all(self) -> Dict[str, Dict[str, Any]]:
-        """服务重启后恢复所有未完成任务"""
-        recovered = {}
-        # 从Redis恢复
-        if self._redis and self._redis_available:
-            try:
-                keys = self._redis.keys("task:*")
-                for key in keys:
-                    raw = self._redis.get(key)
-                    if raw:
-                        task_id = key.decode().replace("task:", "")
-                        recovered[task_id] = json.loads(raw)
-            except Exception:
-                pass
-        # 从内存补充
-        for tid, state in self._memory.items():
-            if tid not in recovered:
-                recovered[tid] = state
-        logger.info("Recovered %d tasks on startup", len(recovered))
+        """服务重启后从 PG 恢复所有未完成任务(status 非终态)。"""
+        recovered: Dict[str, Dict[str, Any]] = {}
+        async with self._db_factory() as db:
+            stmt = select(TaskState).where(
+                TaskState.state["status"].astext.notin_(_TERMINAL_STATUS)
+            )
+            result = await db.execute(stmt)
+            for row in result.scalars().all():
+                recovered[row.task_id] = row.state
+        logger.info("Recovered %d unfinished tasks from PostgreSQL", len(recovered))
         return recovered
+
+    # ---- Redis 缓存:best-effort,任何异常都降级为"无缓存"而非报错 ----
+
+    async def _cache_set(self, task_id: str, state: Dict[str, Any]) -> None:
+        if not self._redis:
+            return
+        try:
+            import json
+
+            await self._redis.setex(
+                f"{_CACHE_PREFIX}{task_id}",
+                _CACHE_TTL,
+                json.dumps(state, ensure_ascii=False),
+            )
+        except Exception as e:
+            logger.warning("Redis cache write failed for %s (ignored): %s", task_id, e)
+
+    async def _cache_get(self, task_id: str) -> Optional[Dict[str, Any]]:
+        if not self._redis:
+            return None
+        try:
+            import json
+
+            raw = await self._redis.get(f"{_CACHE_PREFIX}{task_id}")
+            return json.loads(raw) if raw else None
+        except Exception as e:
+            logger.warning("Redis cache read failed for %s (ignored): %s", task_id, e)
+            return None

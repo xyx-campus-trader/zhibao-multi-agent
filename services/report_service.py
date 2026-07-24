@@ -6,23 +6,35 @@ import uuid
 from core.workflow import build_workflow
 from core.search_decomposer import SearchDecomposer
 from core.persistence import TaskPersistence
+from models.db import get_redis, init_db
 
 logger = logging.getLogger(__name__)
 
 _service_instance = None
 
 
-def get_report_service() -> "ReportService":
+async def init_report_service() -> "ReportService":
+    """服务启动时构建单例:接入真实 PostgreSQL(真值) + Redis(读缓存)。"""
     global _service_instance
     if _service_instance is None:
-        _service_instance = ReportService()
+        session_factory = await init_db()
+        redis_client = await get_redis()
+        _service_instance = ReportService(TaskPersistence(session_factory, redis_client))
+    return _service_instance
+
+
+def get_report_service() -> "ReportService":
+    if _service_instance is None:
+        raise RuntimeError(
+            "ReportService 未初始化,请确保应用启动时已调用 init_report_service()"
+        )
     return _service_instance
 
 
 class ReportService:
-    def __init__(self, persistence: TaskPersistence = None):
+    def __init__(self, persistence: TaskPersistence):
         self.decomposer = SearchDecomposer()
-        self.persistence = persistence or TaskPersistence()
+        self.persistence = persistence
         self.workflow = build_workflow(self.decomposer)
 
     async def create_report(self, topic: str, user_id: int = None) -> str:
@@ -40,6 +52,7 @@ class ReportService:
             "error": None,
             "hitl_approved": False,
             "revision_count": 0,
+            "hitl_revision_count": 0,
         }
 
         try:
@@ -57,7 +70,7 @@ class ReportService:
     async def get_report(self, task_id: str) -> dict:
         return await self.persistence.load_task(task_id) or {}
 
-    async def approve_report(self, task_id: str, approved: bool) -> dict:
+    async def approve_report(self, task_id: str, approved: bool, feedback: str = "") -> dict:
         """人工审核：恢复 HITL 中断的工作流"""
         state = await self.persistence.load_task(task_id)
         if not state:
@@ -65,7 +78,7 @@ class ReportService:
 
         from langgraph.types import Command
         config = {"configurable": {"thread_id": task_id}}
-        resume_value = Command(resume={"approved": approved})
+        resume_value = Command(resume={"approved": approved, "feedback": feedback})
 
         try:
             result = await self.workflow.ainvoke(resume_value, config)

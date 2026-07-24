@@ -66,14 +66,20 @@ async def download_report(task_id: str):
 
 
 @router.post("/{task_id}/approve")
-async def approve_report(task_id: str, approved: bool = True, user: dict = Depends(get_current_user)):
-    """人工审核：批准或驳回 HITL 中断的报告"""
+async def approve_report(
+    task_id: str,
+    approved: bool = True,
+    feedback: str = "",
+    user: dict = Depends(get_current_user),
+):
+    """人工审核：批准或驳回 HITL 中断的报告，驳回时可附修改意见"""
     service = get_report_service()
-    result = await service.approve_report(task_id, approved)
+    result = await service.approve_report(task_id, approved, feedback)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return {
         "task_id": task_id,
         "approved": approved,
+        "feedback": feedback,
         "status": result.get("status", "done"),
     }

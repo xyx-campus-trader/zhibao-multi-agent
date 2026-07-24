@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智报 - 多Agent自动周报系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #f5f7fa; color: #333; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 20px 40px; }
+        .header h1 { font-size: 24px; }
+        .header p { font-size: 14px; opacity: 0.8; margin-top: 4px; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+        .card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
+        .card h2 { font-size: 18px; margin-bottom: 16px; color: #444; }
+        .input-row { display: flex; gap: 12px; }
+        .input-row input { flex: 1; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; outline: none; }
+        .input-row input:focus { border-color: #667eea; }
+        .btn { padding: 12px 24px; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; transition: 0.2s; }
+        .btn-primary { background: #667eea; color: #fff; }
+        .btn-primary:hover { background: #5a6fd6; }
+        .btn-primary:disabled { background: #a0a0a0; cursor: not-allowed; }
+        .btn-success { background: #48bb78; color: #fff; }
+        .btn-success:hover { background: #38a169; }
+        .btn-danger { background: #f56565; color: #fff; }
+        .btn-danger:hover { background: #e53e3e; }
+        .status-bar { display: flex; gap: 12px; align-items: center; margin-top: 16px; padding: 12px; background: #f0f4ff; border-radius: 8px; display: none; }
+        .spinner { width: 20px; height: 20px; border: 3px solid #e0e0e0; border-top-color: #667eea; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .status-text { font-size: 14px; color: #666; }
+        .agent-log { margin-top: 16px; display: none; }
+        .agent-log h3 { font-size: 14px; color: #666; margin-bottom: 8px; }
+        .agent-log pre { background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 8px; font-size: 13px; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+        .report-content { margin-top: 16px; display: none; }
+        .report-content h3 { font-size: 14px; color: #666; margin-bottom: 8px; }
+        .report-content .content { background: #f9fafb; padding: 20px; border-radius: 8px; line-height: 1.8; font-size: 15px; white-space: pre-wrap; }
+        .review-section { margin-top: 16px; display: none; }
+        .review-section textarea { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; min-height: 80px; resize: vertical; }
+        .review-btns { display: flex; gap: 12px; margin-top: 12px; }
+        .hidden { display: none; }
+        .login-section { max-width: 400px; margin: 80px auto; }
+        .login-section .card { padding: 40px; }
+        .login-section h2 { text-align: center; margin-bottom: 24px; }
+        .login-section input { width: 100%; padding: 12px 16px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; margin-bottom: 12px; outline: none; }
+        .login-section input:focus { border-color: #667eea; }
+        .login-section .btn { width: 100%; }
+        .login-section .link { text-align: center; margin-top: 12px; font-size: 14px; }
+        .login-section .link a { color: #667eea; cursor: pointer; text-decoration: none; }
+        .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 8px; color: #fff; font-size: 14px; display: none; z-index: 1000; }
+        .toast.success { background: #48bb78; }
+        .toast.error { background: #f56565; }
+        .user-info { float: right; font-size: 14px; opacity: 0.9; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="toast" id="toast"></div>
+
+    <!-- 登录页 -->
+    <div id="loginPage" class="login-section">
+        <div class="card">
+            <h2>智报 · 多Agent周报系统</h2>
+            <input id="loginUsername" placeholder="用户名" />
+            <input id="loginPassword" type="password" placeholder="密码" />
+            <button class="btn btn-primary" onclick="handleLogin()">登 录</button>
+        </div>
+    </div>
+
+    <!-- 主界面 -->
+    <div id="mainPage" class="hidden">
+        <div class="header">
+            <span class="user-info" id="userInfo" onclick="handleLogout()">退出</span>
+            <h1>智报 · 多Agent自动周报系统</h1>
+            <p>输入一句话，Orchestrator → Researcher → Editor → Reviewer 自动生成行业周报</p>
+        </div>
+        <div class="container">
+            <div class="card">
+                <h2>输入主题</h2>
+                <div class="input-row">
+                    <input id="topicInput" placeholder="例如：本周AI行业动态、半导体行业新闻..." />
+                    <button class="btn btn-primary" id="generateBtn" onclick="handleGenerate()">生成周报</button>
+                </div>
+            </div>
+
+            <div id="statusBar" class="status-bar">
+                <div class="spinner"></div>
+                <span class="status-text" id="statusText">正在生成中...</span>
+            </div>
+
+            <div id="agentLog" class="card agent-log">
+                <h2>Agent 执行日志</h2>
+                <pre id="logContent">等待生成...</pre>
+            </div>
+
+            <div id="reportCard" class="card report-content">
+                <h2>生成的周报</h2>
+                <div class="content" id="reportContent"></div>
+            </div>
+
+            <div id="reviewSection" class="card review-section">
+                <h2>人工审核</h2>
+                <textarea id="feedbackInput" placeholder="审核意见（可选）"></textarea>
+                <div class="review-btns">
+                    <button class="btn btn-success" onclick="handleApprove(true)">批准通过</button>
+                    <button class="btn btn-danger" onclick="handleApprove(false)">驳回修改</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = 'http://localhost:8000';
+        let token = localStorage.getItem('zhibao_token');
+        let currentTaskId = null;
+
+        function toast(msg, type) {
+            const el = document.getElementById('toast');
+            el.textContent = msg; el.className = `toast ${type}`; el.style.display = 'block';
+            setTimeout(() => el.style.display = 'none', 3000);
+        }
+
+        if (token) { document.getElementById('mainPage').classList.remove('hidden'); document.getElementById('loginPage').classList.add('hidden'); }
+
+        async function handleLogin() {
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            if (!username || !password) return toast('请填写完整信息', 'error');
+            try {
+                const res = await fetch(`${API}/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password}) });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '登录失败');
+                token = data.access_token;
+                localStorage.setItem('zhibao_token', token);
+                document.getElementById('mainPage').classList.remove('hidden');
+                document.getElementById('loginPage').classList.add('hidden');
+                toast('登录成功', 'success');
+            } catch(e) { toast(e.message, 'error'); }
+        }
+
+        function handleLogout() {
+            localStorage.removeItem('zhibao_token');
+            token = null;
+            document.getElementById('mainPage').classList.add('hidden');
+            document.getElementById('loginPage').classList.remove('hidden');
+        }
+
+        function getHeaders() {
+            return { 'Content-Type':'application/json', 'Authorization': `Bearer ${token}` };
+        }
+
+        async function handleGenerate() {
+            const topic = document.getElementById('topicInput').value.trim();
+            if (!topic) return toast('请输入主题', 'error');
+
+            document.getElementById('generateBtn').disabled = true;
+            document.getElementById('statusBar').style.display = 'flex';
+            document.getElementById('statusText').textContent = '正在生成中...';
+            document.getElementById('agentLog').style.display = 'block';
+            document.getElementById('logContent').textContent = '正在调用 Orchestrator 拆解任务...\n';
+            document.getElementById('reportCard').style.display = 'none';
+            document.getElementById('reviewSection').style.display = 'none';
+
+            try {
+                const res = await fetch(`${API}/reports/generate`, { method:'POST', headers:getHeaders(), body:JSON.stringify({topic}) });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '生成失败');
+
+                currentTaskId = data.task_id;
+                document.getElementById('logContent').textContent += `✅ 任务已创建: ${data.task_id}\n`;
+
+                // 轮询状态
+                await pollStatus(currentTaskId);
+            } catch(e) {
+                document.getElementById('statusBar').style.display = 'none';
+                document.getElementById('logContent').textContent += `❌ 错误: ${e.message}\n`;
+                toast(e.message, 'error');
+            }
+            document.getElementById('generateBtn').disabled = false;
+        }
+
+        async function pollStatus(taskId) {
+            const maxAttempts = 60;
+            for (let i = 0; i < maxAttempts; i++) {
+                await new Promise(r => setTimeout(r, 3000));
+
+                try {
+                    const res = await fetch(`${API}/reports/${taskId}/status`, { headers:getHeaders() });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail);
+
+                    document.getElementById('logContent').textContent += `[${i*3}s] 状态: ${data.status}\n`;
+
+                    if (data.status === 'done' || data.status === 'awaiting_review') {
+                        document.getElementById('statusBar').style.display = 'none';
+                        document.getElementById('reportCard').style.display = 'block';
+                        document.getElementById('reportContent').textContent = data.report || '（无内容）';
+                        document.getElementById('logContent').textContent += `✅ 周报生成完成！\n`;
+
+                        if (data.status === 'awaiting_review') {
+                            document.getElementById('reviewSection').style.display = 'block';
+                            document.getElementById('logContent').textContent += `⏳ 等待人工审核...\n`;
+                        }
+                        return;
+                    }
+
+                    if (data.status === 'failed') {
+                        document.getElementById('statusBar').style.display = 'none';
+                        document.getElementById('logContent').textContent += `❌ 生成失败: ${data.error || '未知错误'}\n`;
+                        toast('生成失败', 'error');
+                        return;
+                    }
+                } catch(e) {
+                    document.getElementById('logContent').textContent += `⚠️ 查询异常: ${e.message}\n`;
+                }
+            }
+            document.getElementById('statusBar').style.display = 'none';
+            document.getElementById('logContent').textContent += `⏰ 轮询超时\n`;
+        }
+
+        async function handleApprove(approved) {
+            if (!currentTaskId) return toast('没有待审核的任务', 'error');
+            const feedback = document.getElementById('feedbackInput').value.trim();
+
+            try {
+                const res = await fetch(`${API}/reports/${currentTaskId}/approve?approved=${approved}&feedback=${encodeURIComponent(feedback)}`, { method:'POST', headers:getHeaders() });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail);
+                toast(approved ? '已批准通过' : '已驳回修改', 'success');
+                document.getElementById('reviewSection').style.display = 'none';
+                document.getElementById('logContent').textContent += approved ? '✅ 人工审核通过\n' : '🔄 已驳回，等待重新生成\n';
+                if (!approved) {
+                    // 驳回后重新轮询
+                    document.getElementById('statusBar').style.display = 'flex';
+                    document.getElementById('statusText').textContent = '重新生成中...';
+                    await pollStatus(currentTaskId);
+                }
+            } catch(e) { toast(e.message, 'error'); }
+        }
+    </script>
+</body>
+</html>
