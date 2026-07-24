@@ -17,10 +17,10 @@ class CircuitBreaker:
     """断路器：连续失败 N 次后熔断，冷却期后进入半开状态"""
 
     def __init__(self, failure_threshold: int = 3, cooldown_seconds: float = 30.0):
-        self._failure_threshold = failure_threshold
+        self._failure_threshold = max(failure_threshold, 1)  # 最小阈值为1，避免边界异常
         self._cooldown_seconds = cooldown_seconds
         self._failure_count = 0
-        self._last_failure_time: float = 0.0
+        self._last_failure_time: float = time.time()  # 初始化为当前时间，避免epoch触发冷却
         self._lock = threading.Lock()
 
     @property

@@ -254,6 +254,8 @@ def _route_after_review(state: AgentState) -> str:
     status = state.get("status", "")
     if status == "failed":
         return "failed"
+    if status == "done":
+        return "end"
     if status == "revising":
         return "revise"
     if state.get("hitl_approved") is False:
